@@ -26,6 +26,11 @@ DRAG_IMAGE_PATH = os.path.join(ASSETS_DIR, "Drag.png")
 
 # 透明色（用于无边框时抠掉窗口背景，选一个图片里不会出现的颜色）
 TRANSPARENT_COLOR = "#010101"
+# 对应的 RGB 元组，供 PIL 合成透明背景用
+TRANSPARENT_RGB = (1, 1, 1)
+
+# 窗口上下留白（像素），避免 Windows 透明窗口对高图顶部/底部裁剪
+PAD_V = 20
 
 # 桌宠最大尺寸：不超过屏幕高度的六分之一（大于此尺寸时才缩小）
 # 具体值在 _load_images 中按当前屏幕高度计算
@@ -60,15 +65,19 @@ class DesktopPet:
         self._photo_drag = None
         self._load_images()
 
-        # 主显示
+        # 主显示：窗口比图片高 PAD_V（上下留白），人物在画布内垂直居中，避免顶部/底部被系统裁剪
+        self._win_w = self._w
+        self._win_h = self._h + PAD_V
+        self.root.geometry(f"{self._win_w}x{self._win_h}")
         self.canvas = tk.Canvas(
             self.root,
-            width=self._w,
-            height=self._h,
+            width=self._win_w,
+            height=self._win_h,
             bg=TRANSPARENT_COLOR,
             highlightthickness=0,
         )
-        self.canvas.pack()
+        self.canvas.config(scrollregion=(0, 0, self._win_w, self._win_h))
+        self.canvas.pack(fill=tk.BOTH, expand=False)
         self._show_image("Idle")
 
         # 初始位置：屏幕右下角
@@ -123,26 +132,35 @@ class DesktopPet:
             resample = getattr(Image, "Resampling", Image).LANCZOS
             img = img.resize((nw, nh), resample)
             w, h = nw, nh
-        return ImageTk.PhotoImage(img), (w, h)
+        # 透明背景 PNG：合成到纯色底上再转 PhotoImage，避免 Windows 下 alpha 裁剪/显示异常
+        bg = Image.new("RGB", (w, h), TRANSPARENT_RGB)
+        if img.mode == "RGBA" and img.split()[3] is not None:
+            bg.paste(img, (0, 0), img.split()[3])
+        else:
+            bg.paste(img, (0, 0))
+        return ImageTk.PhotoImage(bg), (w, h)
 
     def _show_image(self, state: str):
+        # 图片在画布内水平居中、垂直居中（上下留 PAD_V 空间，避免被裁剪）
+        cx = self._w // 2
+        cy = (PAD_V + self._h) // 2
         if state == "Idle":
             self.canvas.delete("pet")
             self.canvas.create_image(
-                self._w // 2, self._h // 2, image=self._photo_idle, tags=("pet",)
+                cx, cy, image=self._photo_idle, tags=("pet",)
             )
         else:
             self.canvas.delete("pet")
             self.canvas.create_image(
-                self._w // 2, self._h // 2, image=self._photo_drag, tags=("pet",)
+                cx, cy, image=self._photo_drag, tags=("pet",)
             )
 
     def _place_bottom_right(self, margin_x=40, margin_y=40):
         self.root.update_idletasks()
         sw = self.root.winfo_screenwidth()
         sh = self.root.winfo_screenheight()
-        x = sw - self._w - margin_x
-        y = sh - self._h - margin_y
+        x = sw - self._win_w - margin_x
+        y = sh - self._win_h - margin_y
         self.root.geometry(f"+{x}+{y}")
 
     def _on_press(self, event):
@@ -247,12 +265,12 @@ class DesktopPet:
         bh = label.winfo_reqheight() + pad_y * 2
         pet_x = self.root.winfo_x()
         pet_y = self.root.winfo_y()
-        pet_w = self._w
+        pet_w = self._win_w
         bx = pet_x + (pet_w - bw) // 2
         by = pet_y - bh - 8
         # 避免超出屏幕顶部
         if by < 0:
-            by = pet_y + self._h + 8
+            by = pet_y + self._win_h + 8
         bubble.geometry(f"{bw}x{bh}+{bx}+{by}")
         self._bubble_window = bubble
 
