@@ -1,11 +1,13 @@
 # -*- coding: utf-8 -*-
 """
 桌宠 - 桌面宠物
-启动后出现在屏幕右下角，置顶显示。支持 Idle / Drag 状态，长按拖动，点击显示「怎么啦？」。
+启动后出现在屏幕右下角，置顶显示。支持 Idle / Drag 状态，长按拖动，点击随机显示台词。
 右键弹出菜单，可选择退出。
 """
 import sys
 import os
+import json
+import random
 import tkinter as tk
 from tkinter import font as tkfont
 
@@ -15,12 +17,29 @@ try:
 except ImportError:
     _HAS_PIL = False
 
+# 多屏虚拟屏幕范围（Windows）；非 Windows 或获取失败时为 None，用 Tk 的 screen 信息
+def _get_virtual_screen_bounds():
+    if sys.platform != "win32":
+        return None
+    try:
+        import ctypes
+        user32 = ctypes.windll.user32
+        vx = user32.GetSystemMetrics(76)
+        vy = user32.GetSystemMetrics(77)
+        vw = user32.GetSystemMetrics(78)
+        vh = user32.GetSystemMetrics(79)
+        return (vx, vy, vw, vh)
+    except Exception:
+        return None
+
 # 资源路径：打包成 exe 时使用 PyInstaller 解压目录，否则使用脚本所在目录
 if getattr(sys, "frozen", False):
     _base_dir = sys._MEIPASS
 else:
     _base_dir = os.path.dirname(os.path.abspath(__file__))
 ASSETS_DIR = os.path.join(_base_dir, "assets")
+WORDS_DIR = os.path.join(_base_dir, "words")
+LINES_JSON_PATH = os.path.join(WORDS_DIR, "lines.json")
 IDLE_IMAGE_PATH = os.path.join(ASSETS_DIR, "Idle.png")
 DRAG_IMAGE_PATH = os.path.join(ASSETS_DIR, "Drag.png")
 
@@ -177,6 +196,7 @@ class DesktopPet:
         self._long_press_id = None
         if self.state != "Idle":
             return
+        self._close_bubble()
         self.state = "Drag"
         self._show_image("Drag")
 
@@ -216,18 +236,13 @@ class DesktopPet:
         """退出程序."""
         if self._long_press_id is not None:
             self.root.after_cancel(self._long_press_id)
-        if self._bubble_id is not None:
-            self.root.after_cancel(self._bubble_id)
-        if self._bubble_window is not None:
-            try:
-                self._bubble_window.destroy()
-            except Exception:
-                pass
+        self._close_bubble()
         self.root.quit()
         self.root.destroy()
         sys.exit(0)
 
-    def _show_bubble(self):
+    def _close_bubble(self):
+        """关闭台词气泡（取消定时并销毁窗口）。"""
         if self._bubble_id is not None:
             self.root.after_cancel(self._bubble_id)
             self._bubble_id = None
@@ -238,16 +253,54 @@ class DesktopPet:
                 pass
             self._bubble_window = None
 
-        # 气泡小窗口：半透明黑底 + 「怎么啦？」
+    def _get_random_line(self) -> str:
+        """从 words/lines.json 的 lines 数组中随机取一句；文件不存在或为空时返回默认台词。"""
+        default = "怎么啦？"
+        try:
+            if not os.path.isfile(LINES_JSON_PATH):
+                return default
+            with open(LINES_JSON_PATH, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            lines = data.get("lines")
+            if not lines or not isinstance(lines, list):
+                return default
+            lines = [str(s).strip() for s in lines if s]
+            return random.choice(lines) if lines else default
+        except Exception:
+            return default
+
+    def _show_bubble(self):
+        self._close_bubble()
+
+        # 气泡小窗口：半透明黑底 + 随机台词，按屏幕宽度与桌宠位置限制宽度并自动换行
+        text = self._get_random_line()
         bubble = tk.Toplevel(self.root)
         bubble.overrideredirect(True)
         bubble.wm_attributes("-topmost", True)
         bubble.wm_attributes("-alpha", 0.85)
         bubble.configure(bg="#333333")
-
-        text = "怎么啦？"
         f = tkfont.Font(family="Microsoft YaHei", size=12, weight="normal")
         pad_x, pad_y = 12, 8
+        self.root.update_idletasks()
+        v = _get_virtual_screen_bounds()
+        if v is not None:
+            vx, vy, vw, vh = v
+            sw, sh = vw, vh
+        else:
+            sw = self.root.winfo_screenwidth()
+            sh = self.root.winfo_screenheight()
+            vx = vy = 0
+            vw, vh = sw, sh
+        pet_x = self.root.winfo_rootx()
+        pet_y = self.root.winfo_rooty()
+        pet_w = self._win_w
+        margin = 40
+        pet_center = pet_x + pet_w // 2
+        left_room = pet_center - vx - margin
+        right_room = (vx + vw) - margin - pet_center
+        max_bubble_w = min(vw - 2 * margin, 2 * min(left_room, right_room))
+        max_bubble_w = max(120, max_bubble_w)
+        wraplength_px = max_bubble_w - pad_x * 2
         label = tk.Label(
             bubble,
             text=text,
@@ -256,34 +309,41 @@ class DesktopPet:
             bg="#333333",
             padx=pad_x,
             pady=pad_y,
+            wraplength=wraplength_px,
+            justify=tk.LEFT,
         )
         label.pack()
 
-        # 放在桌宠上方居中
         bubble.update_idletasks()
-        bw = label.winfo_reqwidth() + pad_x * 2
+        bw = min(label.winfo_reqwidth() + pad_x * 2, max_bubble_w)
         bh = label.winfo_reqheight() + pad_y * 2
-        pet_x = self.root.winfo_x()
-        pet_y = self.root.winfo_y()
-        pet_w = self._win_w
         bx = pet_x + (pet_w - bw) // 2
         by = pet_y - bh - 8
-        # 避免超出屏幕顶部
-        if by < 0:
+        if by < vy:
             by = pet_y + self._win_h + 8
+        bx = max(vx, min(bx, vx + vw - bw))
+        by = max(vy, min(by, vy + vh - bh))
         bubble.geometry(f"{bw}x{bh}+{bx}+{by}")
         self._bubble_window = bubble
 
-        def close_bubble():
-            self._bubble_id = None
-            try:
-                self._bubble_window.destroy()
-            except Exception:
-                pass
-            self._bubble_window = None
+        def reapply_position():
+            if self._bubble_window is not None and self._bubble_window.winfo_exists():
+                self._bubble_window.geometry(f"+{bx}+{by}")
+        self.root.after(0, reapply_position)
 
-        self._bubble_id = self.root.after(BUBBLE_DURATION_MS, close_bubble)
-        bubble.bind("<Button-1>", lambda e: close_bubble())
+        def on_enter(_e):
+            if self._bubble_id is not None:
+                self.root.after_cancel(self._bubble_id)
+                self._bubble_id = None
+
+        def on_leave(_e):
+            if self._bubble_window is not None and self._bubble_id is None:
+                self._bubble_id = self.root.after(BUBBLE_DURATION_MS, self._close_bubble)
+
+        self._bubble_id = self.root.after(BUBBLE_DURATION_MS, self._close_bubble)
+        bubble.bind("<Enter>", on_enter)
+        bubble.bind("<Leave>", on_leave)
+        bubble.bind("<Button-1>", lambda e: self._close_bubble())
 
     def run(self):
         self.root.mainloop()
