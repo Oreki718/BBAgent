@@ -44,6 +44,14 @@ BBAgent/
 └── README.md
 ```
 
+## Fate Extra CCC 解包
+因为 PSP 的渲染逻辑，角色立绘和CG以patch 形式保存（到头来还得自己拼）。拼接脚本在 script 文件夹下
+
+示例
+```
+python scripts/joint_patches.py "D:\Learning\Career\Software\BBAgent\data\解包\CG\高清CG转化\tile_chara\closet\nero\bridal"
+```
+
 ## 许可证
 
 MIT

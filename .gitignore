@@ -24,3 +24,9 @@ venv/
 # 系统
 .DS_Store
 Thumbs.db
+
+data
+data/
+
+agent_workspace/
+agent_workspace
